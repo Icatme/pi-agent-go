@@ -17,3 +17,6 @@ coverage.out
 # OS
 .DS_Store
 Thumbs.db
+
+# Local agent instructions
+AGENTS.md

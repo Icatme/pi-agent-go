@@ -5,6 +5,36 @@
 It is intentionally separate from `prebuilt/` so it can evolve without requiring
 changes to the upstream `langgraphgo` framework.
 
+## Project Goals
+
+Core goals:
+
+- Port the original `pi-agent-core` single-agent runtime into idiomatic Go.
+- Preserve the original runtime behavior where it matters:
+  - prompt / continue / steer / follow-up
+  - assistant message lifecycle
+  - tool execution lifecycle
+  - runtime state and event flow
+- Keep `StreamModel` as the stable backend boundary so providers and gateways can
+  be integrated without pushing transport logic into the core runtime.
+- Keep the package usable on its own and also usable as a thin integration layer
+  inside `langgraphgo`.
+
+Non-goals:
+
+- This repository is not a replacement for `langgraphgo` graph orchestration.
+- This repository does not aim to own multi-agent, supervisor, planner, or
+  tree-of-thoughts workflows in the core package.
+- This repository should not require modifications to `langgraphgo` core
+  packages in order to work.
+
+Success means:
+
+- the core package can run independently in Go
+- the core package stays aligned with the original `pi-agent-core` semantics
+- integration with `langgraphgo` remains a thin adapter, not a forked runtime
+- backend integrations happen behind `StreamModel`, not inside the agent loop
+
 ## What It Provides
 
 - A serializable `AgentSnapshot`
@@ -19,7 +49,6 @@ changes to the upstream `langgraphgo` framework.
 - A higher-level `Agent` wrapper
 - Package-level loop façades: `RunAgentLoop`, `RunAgentLoopContinue`
 - Adapters for:
-  - `langchaingo` models
   - `langgraphgo` graph nodes
   - a standard checkpoint-friendly `SessionState` graph wrapper
 
@@ -27,8 +56,6 @@ changes to the upstream `langgraphgo` framework.
 
 - `piagentgo/`
   - core runtime types, state, engine, and agent wrapper
-- `piagentgo/adapters/langchaingo`
-  - adapts `llms.Model` to `piagentgo.StreamModel`
 - `piagentgo/adapters/langgraphgo`
   - adapts `piagentgo` into `langgraphgo` graph nodes
 
@@ -42,17 +69,17 @@ import (
 	"fmt"
 
 	core "github.com/Icatme/pi-agent-go"
-	langchaingo "github.com/Icatme/pi-agent-go/adapters/langchaingo"
-	"github.com/tmc/langchaingo/llms/openai"
 )
 
-func main() {
-	model, _ := openai.New()
+type echoModel struct{}
 
+func (echoModel) Stream(ctx context.Context, request core.ModelRequest) (core.AssistantStream, error) {
+	panic("implement StreamModel with your provider client")
+}
+
+func main() {
 	agent, _ := core.NewAgentWithOptions(core.AgentOptions{
-		Model: core.StreamFunc(func(ctx context.Context, request core.ModelRequest) (core.AssistantStream, error) {
-			return langchaingo.NewModel(model).Stream(ctx, request)
-		}),
+		Model: echoModel{},
 		InitialState: core.AgentInitialState{
 			SystemPrompt: "You are a helpful assistant.",
 		},
@@ -68,9 +95,9 @@ func main() {
 }
 ```
 
-`StreamModel` is the primary model abstraction. If you already have an
-Entgateway-backed client, pass it directly. `StreamFunc` is only a convenience
-adapter for function-style integration.
+`StreamModel` is the primary model abstraction. Integrate providers by
+implementing that interface directly, or use `StreamFunc` when a function-style
+adapter is enough.
 
 ## Graph Usage
 
@@ -161,8 +188,5 @@ Use `langgraphgo` for:
 
 ## Current Limitations
 
-- The `langchaingo` adapter maps text streaming directly, but provider-specific
-  low-level delta types are still normalized when the backend cannot expose a
-  richer event stream.
 - The built-in graph wrapper is intentionally a single-session node. Multi-node
   orchestration and supervisor-style routing should still live in `langgraphgo`.
