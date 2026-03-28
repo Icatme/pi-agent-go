@@ -285,17 +285,19 @@ func (e *Engine) executeToolCalls(ctx context.Context, definition AgentDefinitio
 	for i, call := range assistant.ToolCalls {
 		call = cloneToolCall(call)
 		snapshot.PendingToolCalls = append(snapshot.PendingToolCalls, PendingToolCall{
-			ToolCallID: call.ID,
-			ToolName:   call.Name,
+			ToolCallID:         call.ID,
+			OriginalToolCallID: call.OriginalID,
+			ToolName:           call.Name,
 		})
 
 		tool, ok := toolMap[call.Name]
 		if !ok {
 			emitEvent(emit, AgentEvent{
-				Type:       EventToolExecutionStart,
-				ToolCall:   &call,
-				ToolCallID: call.ID,
-				ToolName:   call.Name,
+				Type:               EventToolExecutionStart,
+				ToolCall:           &call,
+				ToolCallID:         call.ID,
+				OriginalToolCallID: call.OriginalID,
+				ToolName:           call.Name,
 			})
 			prepared[i] = preparedToolCall{
 				call: call,
@@ -311,11 +313,12 @@ func (e *Engine) executeToolCalls(ctx context.Context, definition AgentDefinitio
 
 		args, err := parseToolArguments(tool, call)
 		emitEvent(emit, AgentEvent{
-			Type:       EventToolExecutionStart,
-			ToolCall:   &call,
-			ToolCallID: call.ID,
-			ToolName:   call.Name,
-			Args:       cloneAny(args),
+			Type:               EventToolExecutionStart,
+			ToolCall:           &call,
+			ToolCallID:         call.ID,
+			OriginalToolCallID: call.OriginalID,
+			ToolName:           call.Name,
+			Args:               cloneAny(args),
 		})
 		if err != nil {
 			prepared[i] = preparedToolCall{
@@ -388,13 +391,14 @@ func (e *Engine) executeToolCalls(ctx context.Context, definition AgentDefinitio
 			if item.immediate {
 				outcomes[i] = item.outcome
 				emitEvent(emit, AgentEvent{
-					Type:       EventToolExecutionEnd,
-					ToolCall:   &item.outcome.call,
-					ToolCallID: item.outcome.call.ID,
-					ToolName:   item.outcome.call.Name,
-					Args:       cloneAny(item.outcome.args),
-					ToolResult: &item.outcome.result,
-					IsError:    item.outcome.isError,
+					Type:               EventToolExecutionEnd,
+					ToolCall:           &item.outcome.call,
+					ToolCallID:         item.outcome.call.ID,
+					OriginalToolCallID: item.outcome.call.OriginalID,
+					ToolName:           item.outcome.call.Name,
+					Args:               cloneAny(item.outcome.args),
+					ToolResult:         &item.outcome.result,
+					IsError:            item.outcome.isError,
 				})
 				continue
 			}
@@ -436,26 +440,28 @@ func (e *Engine) executeToolCalls(ctx context.Context, definition AgentDefinitio
 func (e *Engine) executePreparedTool(ctx context.Context, definition AgentDefinition, assistant Message, prepared preparedToolCall, emit EventSink) (toolOutcome, error) {
 	if prepared.immediate {
 		emitEvent(emit, AgentEvent{
-			Type:       EventToolExecutionEnd,
-			ToolCall:   &prepared.outcome.call,
-			ToolCallID: prepared.outcome.call.ID,
-			ToolName:   prepared.outcome.call.Name,
-			Args:       cloneAny(prepared.outcome.args),
-			ToolResult: &prepared.outcome.result,
-			IsError:    prepared.outcome.isError,
+			Type:               EventToolExecutionEnd,
+			ToolCall:           &prepared.outcome.call,
+			ToolCallID:         prepared.outcome.call.ID,
+			OriginalToolCallID: prepared.outcome.call.OriginalID,
+			ToolName:           prepared.outcome.call.Name,
+			Args:               cloneAny(prepared.outcome.args),
+			ToolResult:         &prepared.outcome.result,
+			IsError:            prepared.outcome.isError,
 		})
 		return prepared.outcome, nil
 	}
 
 	result, execErr := prepared.tool.Execute(ctx, prepared.call.ID, cloneAny(prepared.args), func(partial ToolResult) {
 		emitEvent(emit, AgentEvent{
-			Type:              EventToolExecutionUpdate,
-			ToolCall:          &prepared.call,
-			ToolCallID:        prepared.call.ID,
-			ToolName:          prepared.call.Name,
-			Args:              cloneAny(prepared.args),
-			ToolResult:        &partial,
-			PartialToolResult: &partial,
+			Type:               EventToolExecutionUpdate,
+			ToolCall:           &prepared.call,
+			ToolCallID:         prepared.call.ID,
+			OriginalToolCallID: prepared.call.OriginalID,
+			ToolName:           prepared.call.Name,
+			Args:               cloneAny(prepared.args),
+			ToolResult:         &partial,
+			PartialToolResult:  &partial,
 		})
 	})
 
@@ -488,13 +494,14 @@ func (e *Engine) executePreparedTool(ctx context.Context, definition AgentDefini
 	}
 
 	emitEvent(emit, AgentEvent{
-		Type:       EventToolExecutionEnd,
-		ToolCall:   &outcome.call,
-		ToolCallID: outcome.call.ID,
-		ToolName:   outcome.call.Name,
-		Args:       cloneAny(outcome.args),
-		ToolResult: &outcome.result,
-		IsError:    outcome.isError,
+		Type:               EventToolExecutionEnd,
+		ToolCall:           &outcome.call,
+		ToolCallID:         outcome.call.ID,
+		OriginalToolCallID: outcome.call.OriginalID,
+		ToolName:           outcome.call.Name,
+		Args:               cloneAny(outcome.args),
+		ToolResult:         &outcome.result,
+		IsError:            outcome.isError,
 	})
 	return outcome, nil
 }
@@ -580,6 +587,10 @@ func cloneMessage(message Message) Message {
 		ToolCalls:    cloneToolCalls(message.ToolCalls),
 		ToolResult:   cloneToolResultPayload(message.ToolResult),
 		Timestamp:    message.Timestamp,
+		API:          message.API,
+		Provider:     message.Provider,
+		Model:        message.Model,
+		ResponseID:   message.ResponseID,
 		Metadata:     cloneStringAnyMap(message.Metadata),
 		Payload:      cloneStringAnyMap(message.Payload),
 		StopReason:   message.StopReason,
@@ -607,10 +618,12 @@ func cloneToolCall(call ToolCall) ToolCall {
 		arguments = append(arguments, call.Arguments...)
 	}
 	return ToolCall{
-		ID:         call.ID,
-		Name:       call.Name,
-		Arguments:  arguments,
-		ParsedArgs: cloneStringAnyMap(call.ParsedArgs),
+		ID:               call.ID,
+		OriginalID:       call.OriginalID,
+		Name:             call.Name,
+		Arguments:        arguments,
+		ParsedArgs:       cloneStringAnyMap(call.ParsedArgs),
+		ThoughtSignature: call.ThoughtSignature,
 	}
 }
 
@@ -663,10 +676,51 @@ func cloneTools(tools []ToolDefinition) []ToolDefinition {
 
 func cloneModelRef(ref ModelRef) ModelRef {
 	return ModelRef{
-		Provider: ref.Provider,
-		Model:    ref.Model,
-		Metadata: cloneStringAnyMap(ref.Metadata),
+		Provider:       ref.Provider,
+		Model:          ref.Model,
+		ProviderConfig: cloneProviderConfig(ref.ProviderConfig),
+		Metadata:       cloneStringAnyMap(ref.Metadata),
 	}
+}
+
+func cloneProviderConfig(config ProviderConfig) ProviderConfig {
+	return ProviderConfig{
+		BaseURL: config.BaseURL,
+		APIKey:  config.APIKey,
+		Headers: cloneStringMap(config.Headers),
+		Auth:    cloneProviderAuthConfig(config.Auth),
+	}
+}
+
+func cloneProviderAuthConfig(config *ProviderAuthConfig) *ProviderAuthConfig {
+	if config == nil {
+		return nil
+	}
+
+	cloned := *config
+	cloned.OAuth = cloneOAuthCredentials(config.OAuth)
+	return &cloned
+}
+
+func cloneOAuthCredentials(credentials *OAuthCredentials) *OAuthCredentials {
+	if credentials == nil {
+		return nil
+	}
+
+	cloned := *credentials
+	return &cloned
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]string, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func cloneThinkingBudgets(budgets ThinkingBudgets) ThinkingBudgets {

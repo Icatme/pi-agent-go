@@ -43,8 +43,10 @@ The repository has been split out as an independent public project and can be bu
 
 - Implemented the core agent runtime with prompt, continue, steer, follow-up, abort, and idle waiting behavior.
 - Implemented runtime state tracking, including streaming status, pending tool calls, and error state.
+- Extended pending tool-call tracking so runtime state can retain original provider tool ids alongside normalized ids.
 - Implemented tool execution flow with before/after hooks and sequential or parallel execution modes.
 - Implemented message conversion and context transformation boundaries.
+- Expanded the message model to preserve provider/runtime fields such as `response_id`, `provider`, `api`, `model`, thinking signatures, and original tool call ids.
 
 ### Public API
 
@@ -52,11 +54,14 @@ The repository has been split out as an independent public project and can be bu
 - Added package-level loop helpers mirroring the original runtime shape.
 - Added prompt convenience methods for text and image input.
 - Added custom message helpers without copying TypeScript-only declaration-merging patterns.
+- Added built-in default provider resolution through `pi-go` when a `ModelRef{Provider, Model}` is configured.
+- Added typed `ProviderConfig` / auth config on `ModelRef` so default provider execution no longer depends on ad-hoc metadata keys.
 
 ### Event Model
 
 - Added assistant event types for start, text lifecycle, tool-call lifecycle, done, and error.
 - Tightened runtime tests around streaming state, abort behavior, turn events, and tool-execution events.
+- Verified the default `pi-go` provider path preserves reasoning deltas, tool-call deltas, replay signatures, raw tool ids, and provider response ids.
 
 ### Integration Layers
 
@@ -68,12 +73,12 @@ The repository has been split out as an independent public project and can be bu
 - Core focus remains the original `pi-agent-core` runtime.
 - Multi-agent, supervisor, planner, and graph-native orchestration are out of scope for core.
 - LangGraphGo integration is optional and should remain a thin adapter layer.
-- `StreamModel` is the main long-term interface for model backends.
+- `StreamModel` is the main long-term interface for model backends, with `pi-go` as the built-in default provider implementation.
 
 ## Known Design Notes
 
 - Keeping optional adapters in the main module still pulls their dependency graph into the root `go.mod`.
-- Provider-specific streaming fidelity still depends on the backend integration, especially for thinking and tool-call deltas.
+- Provider-specific streaming fidelity now flows through the built-in `pi-go` path for supported providers, while custom `StreamModel` implementations can still define their own fidelity.
 - Some integration-oriented files exist because the project was extracted from earlier work inside another repository; they should continue to be treated as optional layers.
 
 ## Recommended Next Steps

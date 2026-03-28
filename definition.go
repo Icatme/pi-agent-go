@@ -70,6 +70,9 @@ func (d AgentDefinition) ResolveModel(ctx context.Context, snapshot AgentSnapsho
 		ref = cloneModelRef(d.DefaultModel)
 	}
 	if d.ModelResolver == nil {
+		if ref.Provider != "" && ref.Model != "" {
+			return defaultProviderStreamModel, ref, nil
+		}
 		return nil, ModelRef{}, ErrModelNotConfigured
 	}
 

@@ -17,6 +17,8 @@ Core goals:
   - runtime state and event flow
 - Keep `StreamModel` as the stable backend boundary so providers and gateways can
   be integrated without pushing transport logic into the core runtime.
+- Use `pi-go` as the built-in default provider implementation when a
+  `ModelRef{Provider, Model}` is configured.
 - Keep the package usable on its own and also usable as a thin integration layer
   inside `langgraphgo`.
 
@@ -40,6 +42,7 @@ Success means:
 - A serializable `AgentSnapshot`
 - A user-facing `AgentOptions` / `InitialState`
 - A low-level `AgentDefinition` / `DefinitionResolver`
+- A built-in default `StreamModel` backed by `pi-go` provider implementations
 - A turn-based `Engine` with:
   - assistant message streaming
   - tool execution
@@ -98,6 +101,17 @@ func main() {
 `StreamModel` is the primary model abstraction. Integrate providers by
 implementing that interface directly, or use `StreamFunc` when a function-style
 adapter is enough.
+
+If you only need built-in provider execution, set `InitialState.ModelRef` or
+`AgentDefinition.DefaultModel` with `Provider` and `Model`. The runtime will
+resolve the default `pi-go` provider implementation automatically.
+
+`ModelRef.ProviderConfig` carries typed provider runtime settings when needed:
+
+- `base_url`: override the provider base URL
+- `api_key`: explicit API key or bearer token
+- `headers`: extra request headers as `map[string]string`
+- `auth`: typed provider auth config for provider-specific auth flows
 
 ## Graph Usage
 
@@ -176,6 +190,8 @@ Use `piagentgo` for:
 - single-agent runtime behavior
 - message lifecycle
 - tool lifecycle
+- assistant messages that preserve `response_id`, `provider`, `api`, `model`,
+  thinking signatures, and original tool call ids
 - user-facing agent construction via `AgentOptions`
 - dynamic low-level agent definition when needed
 

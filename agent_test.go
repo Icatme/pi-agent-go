@@ -966,9 +966,10 @@ func TestAgentPendingToolCallsUpdateDuringExecution(t *testing.T) {
 					return newStaticAssistantStream(Message{
 						Role: RoleAssistant,
 						ToolCalls: []ToolCall{{
-							ID:        "tool-1",
-							Name:      "slow",
-							Arguments: []byte(`{"value":"x"}`),
+							ID:         "tool-1",
+							OriginalID: "tool-raw-1",
+							Name:       "slow",
+							Arguments:  []byte(`{"value":"x"}`),
 						}},
 						Timestamp:  time.Now().UTC(),
 						StopReason: StopReasonToolUse,
@@ -1000,8 +1001,15 @@ func TestAgentPendingToolCallsUpdateDuringExecution(t *testing.T) {
 		switch event.Type {
 		case EventToolExecutionStart:
 			state := agent.State()
-			if _, ok := state.PendingToolCalls["tool-1"]; !ok {
+			pending, ok := state.PendingToolCalls["tool-1"]
+			if !ok {
 				t.Fatalf("expected pending tool call to be present during start, got %+v", state.PendingToolCalls)
+			}
+			if pending.OriginalToolCallID != "tool-raw-1" {
+				t.Fatalf("expected pending original tool call id %q, got %+v", "tool-raw-1", pending)
+			}
+			if event.OriginalToolCallID != "tool-raw-1" {
+				t.Fatalf("expected event original tool call id %q, got %+v", "tool-raw-1", event)
 			}
 			toolStarted <- struct{}{}
 		case EventToolExecutionEnd:

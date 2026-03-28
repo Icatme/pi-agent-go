@@ -19,8 +19,19 @@ func TestNewAgentWithOptionsUsesInitialState(t *testing.T) {
 			},
 		},
 		InitialState: AgentInitialState{
-			SystemPrompt:  "You are helpful.",
-			ModelRef:      ModelRef{Provider: "openai", Model: "gpt-4o-mini"},
+			SystemPrompt: "You are helpful.",
+			ModelRef: ModelRef{
+				Provider: "openai",
+				Model:    "gpt-4o-mini",
+				ProviderConfig: ProviderConfig{
+					BaseURL: "https://example.com",
+					APIKey:  "token-1",
+					Headers: map[string]string{"x-test": "1"},
+					Auth: &ProviderAuthConfig{
+						Type: ProviderAuthTypeAPIKey,
+					},
+				},
+			},
 			ThinkingLevel: ThinkingLow,
 			Tools:         []ToolDefinition{{Name: "test"}},
 			Messages:      []Message{NewTextMessage(RoleUser, "hello")},
@@ -40,6 +51,9 @@ func TestNewAgentWithOptionsUsesInitialState(t *testing.T) {
 	}
 	if state.Model.Provider != "openai" || state.Model.Model != "gpt-4o-mini" {
 		t.Fatalf("unexpected model ref %+v", state.Model)
+	}
+	if state.Model.ProviderConfig.BaseURL != "https://example.com" || state.Model.ProviderConfig.Headers["x-test"] != "1" {
+		t.Fatalf("unexpected provider config %+v", state.Model.ProviderConfig)
 	}
 	if state.ThinkingLevel != ThinkingLow {
 		t.Fatalf("expected thinking level %q, got %q", ThinkingLow, state.ThinkingLevel)

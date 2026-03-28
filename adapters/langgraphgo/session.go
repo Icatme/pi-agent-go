@@ -267,6 +267,7 @@ func hasSnapshot(snapshot piagentgo.AgentSnapshot) bool {
 		snapshot.Error != "" ||
 		snapshot.Model.Provider != "" ||
 		snapshot.Model.Model != "" ||
+		!isZeroProviderConfig(snapshot.Model.ProviderConfig) ||
 		len(snapshot.Model.Metadata) > 0 ||
 		len(snapshot.Messages) > 0 ||
 		len(snapshot.PendingToolCalls) > 0 ||
@@ -321,6 +322,10 @@ func cloneMessage(message piagentgo.Message) piagentgo.Message {
 		ToolCalls:    cloneToolCalls(message.ToolCalls),
 		ToolResult:   cloneToolResultPayload(message.ToolResult),
 		Timestamp:    message.Timestamp,
+		API:          message.API,
+		Provider:     message.Provider,
+		Model:        message.Model,
+		ResponseID:   message.ResponseID,
 		Metadata:     cloneStringAnyMap(message.Metadata),
 		Payload:      cloneStringAnyMap(message.Payload),
 		StopReason:   message.StopReason,
@@ -346,10 +351,12 @@ func cloneToolCalls(calls []piagentgo.ToolCall) []piagentgo.ToolCall {
 	cloned := make([]piagentgo.ToolCall, 0, len(calls))
 	for _, call := range calls {
 		cloned = append(cloned, piagentgo.ToolCall{
-			ID:         call.ID,
-			Name:       call.Name,
-			Arguments:  cloneRawMessage(call.Arguments),
-			ParsedArgs: cloneStringAnyMap(call.ParsedArgs),
+			ID:               call.ID,
+			OriginalID:       call.OriginalID,
+			Name:             call.Name,
+			Arguments:        cloneRawMessage(call.Arguments),
+			ParsedArgs:       cloneStringAnyMap(call.ParsedArgs),
+			ThoughtSignature: call.ThoughtSignature,
 		})
 	}
 	return cloned
@@ -361,11 +368,12 @@ func cloneToolResultPayload(payload *piagentgo.ToolResultPayload) *piagentgo.Too
 	}
 
 	return &piagentgo.ToolResultPayload{
-		ToolCallID: payload.ToolCallID,
-		ToolName:   payload.ToolName,
-		Content:    cloneParts(payload.Content),
-		Details:    payload.Details,
-		IsError:    payload.IsError,
+		ToolCallID:         payload.ToolCallID,
+		OriginalToolCallID: payload.OriginalToolCallID,
+		ToolName:           payload.ToolName,
+		Content:            cloneParts(payload.Content),
+		Details:            payload.Details,
+		IsError:            payload.IsError,
 	}
 }
 
@@ -381,10 +389,58 @@ func clonePendingToolCalls(calls []piagentgo.PendingToolCall) []piagentgo.Pendin
 
 func cloneModelRef(ref piagentgo.ModelRef) piagentgo.ModelRef {
 	return piagentgo.ModelRef{
-		Provider: ref.Provider,
-		Model:    ref.Model,
-		Metadata: cloneStringAnyMap(ref.Metadata),
+		Provider:       ref.Provider,
+		Model:          ref.Model,
+		ProviderConfig: cloneProviderConfig(ref.ProviderConfig),
+		Metadata:       cloneStringAnyMap(ref.Metadata),
 	}
+}
+
+func cloneProviderConfig(config piagentgo.ProviderConfig) piagentgo.ProviderConfig {
+	return piagentgo.ProviderConfig{
+		BaseURL: config.BaseURL,
+		APIKey:  config.APIKey,
+		Headers: cloneStringMap(config.Headers),
+		Auth:    cloneProviderAuthConfig(config.Auth),
+	}
+}
+
+func cloneProviderAuthConfig(config *piagentgo.ProviderAuthConfig) *piagentgo.ProviderAuthConfig {
+	if config == nil {
+		return nil
+	}
+
+	cloned := *config
+	cloned.OAuth = cloneOAuthCredentials(config.OAuth)
+	return &cloned
+}
+
+func cloneOAuthCredentials(credentials *piagentgo.OAuthCredentials) *piagentgo.OAuthCredentials {
+	if credentials == nil {
+		return nil
+	}
+
+	cloned := *credentials
+	return &cloned
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func isZeroProviderConfig(config piagentgo.ProviderConfig) bool {
+	return config.BaseURL == "" &&
+		config.APIKey == "" &&
+		len(config.Headers) == 0 &&
+		config.Auth == nil
 }
 
 func cloneStringAnyMap(values map[string]any) map[string]any {

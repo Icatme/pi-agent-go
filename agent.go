@@ -71,7 +71,10 @@ func newAgent(definition AgentDefinition, baseSnapshot AgentSnapshot, opts ...Ag
 	if snapshot.SystemPrompt == "" {
 		snapshot.SystemPrompt = definition.SystemPrompt
 	}
-	if snapshot.Model.Model == "" && snapshot.Model.Provider == "" && len(snapshot.Model.Metadata) == 0 {
+	if snapshot.Model.Model == "" &&
+		snapshot.Model.Provider == "" &&
+		isZeroProviderConfig(snapshot.Model.ProviderConfig) &&
+		len(snapshot.Model.Metadata) == 0 {
 		snapshot.Model = cloneModelRef(definition.DefaultModel)
 	}
 
@@ -563,14 +566,18 @@ func (a *Agent) processLoopEvent(event AgentEvent) {
 			if toolCallID == "" {
 				toolCallID = event.ToolCall.ID
 			}
+			if event.OriginalToolCallID == "" {
+				event.OriginalToolCallID = event.ToolCall.OriginalID
+			}
 			if toolName == "" {
 				toolName = event.ToolCall.Name
 			}
 		}
 		if toolCallID != "" {
 			a.state.PendingToolCalls[toolCallID] = PendingToolCall{
-				ToolCallID: toolCallID,
-				ToolName:   toolName,
+				ToolCallID:         toolCallID,
+				OriginalToolCallID: event.OriginalToolCallID,
+				ToolName:           toolName,
 			}
 		}
 	case EventToolExecutionEnd:
@@ -729,8 +736,18 @@ func effectiveSystemPrompt(snapshot AgentSnapshot, definition AgentDefinition) s
 }
 
 func effectiveModelRef(snapshot AgentSnapshot, definition AgentDefinition) ModelRef {
-	if snapshot.Model.Model != "" || snapshot.Model.Provider != "" || len(snapshot.Model.Metadata) > 0 {
+	if snapshot.Model.Model != "" ||
+		snapshot.Model.Provider != "" ||
+		!isZeroProviderConfig(snapshot.Model.ProviderConfig) ||
+		len(snapshot.Model.Metadata) > 0 {
 		return cloneModelRef(snapshot.Model)
 	}
 	return cloneModelRef(definition.DefaultModel)
+}
+
+func isZeroProviderConfig(config ProviderConfig) bool {
+	return config.BaseURL == "" &&
+		config.APIKey == "" &&
+		len(config.Headers) == 0 &&
+		config.Auth == nil
 }

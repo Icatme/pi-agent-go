@@ -148,6 +148,10 @@ type Transport string
 const (
 	// TransportSSE prefers server-sent events style streaming.
 	TransportSSE Transport = "sse"
+	// TransportWebSocket prefers a websocket stream when the provider supports it.
+	TransportWebSocket Transport = "websocket"
+	// TransportAuto lets the provider choose the best available stream transport.
+	TransportAuto Transport = "auto"
 )
 
 // ThinkingBudgets stores optional token budgets per thinking level.
@@ -155,18 +159,22 @@ type ThinkingBudgets map[ThinkingLevel]int
 
 // Part is a single content fragment inside a message.
 type Part struct {
-	Type     PartType `json:"type"`
-	Text     string   `json:"text,omitempty"`
-	ImageURL string   `json:"image_url,omitempty"`
-	MIMEType string   `json:"mime_type,omitempty"`
+	Type      PartType `json:"type"`
+	Text      string   `json:"text,omitempty"`
+	ImageURL  string   `json:"image_url,omitempty"`
+	MIMEType  string   `json:"mime_type,omitempty"`
+	Signature string   `json:"signature,omitempty"`
+	Redacted  bool     `json:"redacted,omitempty"`
 }
 
 // ToolCall is an assistant-emitted tool invocation request.
 type ToolCall struct {
-	ID         string          `json:"id"`
-	Name       string          `json:"name"`
-	Arguments  json.RawMessage `json:"arguments,omitempty"`
-	ParsedArgs map[string]any  `json:"parsed_args,omitempty"`
+	ID               string          `json:"id"`
+	OriginalID       string          `json:"original_id,omitempty"`
+	Name             string          `json:"name"`
+	Arguments        json.RawMessage `json:"arguments,omitempty"`
+	ParsedArgs       map[string]any  `json:"parsed_args,omitempty"`
+	ThoughtSignature string          `json:"thought_signature,omitempty"`
 }
 
 // ToolResult is the normalized output of a tool execution.
@@ -177,11 +185,12 @@ type ToolResult struct {
 
 // ToolResultPayload stores tool-result specific message data.
 type ToolResultPayload struct {
-	ToolCallID string `json:"tool_call_id"`
-	ToolName   string `json:"tool_name"`
-	Content    []Part `json:"content,omitempty"`
-	Details    any    `json:"details,omitempty"`
-	IsError    bool   `json:"is_error"`
+	ToolCallID         string `json:"tool_call_id"`
+	OriginalToolCallID string `json:"original_tool_call_id,omitempty"`
+	ToolName           string `json:"tool_name"`
+	Content            []Part `json:"content,omitempty"`
+	Details            any    `json:"details,omitempty"`
+	IsError            bool   `json:"is_error"`
 }
 
 // Message is the canonical runtime message envelope.
@@ -193,6 +202,10 @@ type Message struct {
 	ToolCalls    []ToolCall         `json:"tool_calls,omitempty"`
 	ToolResult   *ToolResultPayload `json:"tool_result,omitempty"`
 	Timestamp    time.Time          `json:"timestamp"`
+	API          string             `json:"api,omitempty"`
+	Provider     string             `json:"provider,omitempty"`
+	Model        string             `json:"model,omitempty"`
+	ResponseID   string             `json:"response_id,omitempty"`
 	Metadata     map[string]any     `json:"metadata,omitempty"`
 	Payload      map[string]any     `json:"payload,omitempty"`
 	StopReason   StopReason         `json:"stop_reason,omitempty"`
@@ -201,15 +214,49 @@ type Message struct {
 
 // PendingToolCall tracks tool calls that are currently in-flight.
 type PendingToolCall struct {
-	ToolCallID string `json:"tool_call_id"`
-	ToolName   string `json:"tool_name"`
+	ToolCallID         string `json:"tool_call_id"`
+	OriginalToolCallID string `json:"original_tool_call_id,omitempty"`
+	ToolName           string `json:"tool_name"`
+}
+
+// ProviderAuthType identifies the provider credential strategy.
+type ProviderAuthType string
+
+const (
+	// ProviderAuthTypeAPIKey uses a static API key or bearer token.
+	ProviderAuthTypeAPIKey ProviderAuthType = "apiKey"
+	// ProviderAuthTypeOAuth uses OAuth credentials.
+	ProviderAuthTypeOAuth ProviderAuthType = "oauth"
+)
+
+// OAuthCredentials stores provider OAuth tokens.
+type OAuthCredentials struct {
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	ExpiresUnix  int64  `json:"expires_unix,omitempty"`
+}
+
+// ProviderAuthConfig stores the auth payload for one provider.
+type ProviderAuthConfig struct {
+	Type   ProviderAuthType  `json:"type,omitempty"`
+	APIKey string            `json:"api_key,omitempty"`
+	OAuth  *OAuthCredentials `json:"oauth,omitempty"`
+}
+
+// ProviderConfig stores typed runtime configuration for the selected provider.
+type ProviderConfig struct {
+	BaseURL string              `json:"base_url,omitempty"`
+	APIKey  string              `json:"api_key,omitempty"`
+	Headers map[string]string   `json:"headers,omitempty"`
+	Auth    *ProviderAuthConfig `json:"auth,omitempty"`
 }
 
 // ModelRef identifies a model without storing provider runtime objects in snapshot state.
 type ModelRef struct {
-	Provider string         `json:"provider,omitempty"`
-	Model    string         `json:"model,omitempty"`
-	Metadata map[string]any `json:"metadata,omitempty"`
+	Provider       string         `json:"provider,omitempty"`
+	Model          string         `json:"model,omitempty"`
+	ProviderConfig ProviderConfig `json:"provider_config,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
 // AgentSnapshot is the serializable runtime state for a session.
@@ -250,21 +297,22 @@ type AgentState struct {
 
 // AgentEvent is emitted to subscribers for lifecycle, message, and tool updates.
 type AgentEvent struct {
-	Type              EventType       `json:"type"`
-	Timestamp         time.Time       `json:"timestamp"`
-	Message           *Message        `json:"message,omitempty"`
-	Messages          []Message       `json:"messages,omitempty"`
-	Delta             string          `json:"delta,omitempty"`
-	AssistantEvent    *AssistantEvent `json:"assistant_event,omitempty"`
-	ToolCall          *ToolCall       `json:"tool_call,omitempty"`
-	ToolCallID        string          `json:"tool_call_id,omitempty"`
-	ToolName          string          `json:"tool_name,omitempty"`
-	Args              any             `json:"args,omitempty"`
-	ToolResult        *ToolResult     `json:"tool_result,omitempty"`
-	PartialToolResult *ToolResult     `json:"partial_tool_result,omitempty"`
-	ToolMessages      []Message       `json:"tool_messages,omitempty"`
-	IsError           bool            `json:"is_error,omitempty"`
-	Err               error           `json:"-"`
+	Type               EventType       `json:"type"`
+	Timestamp          time.Time       `json:"timestamp"`
+	Message            *Message        `json:"message,omitempty"`
+	Messages           []Message       `json:"messages,omitempty"`
+	Delta              string          `json:"delta,omitempty"`
+	AssistantEvent     *AssistantEvent `json:"assistant_event,omitempty"`
+	ToolCall           *ToolCall       `json:"tool_call,omitempty"`
+	ToolCallID         string          `json:"tool_call_id,omitempty"`
+	OriginalToolCallID string          `json:"original_tool_call_id,omitempty"`
+	ToolName           string          `json:"tool_name,omitempty"`
+	Args               any             `json:"args,omitempty"`
+	ToolResult         *ToolResult     `json:"tool_result,omitempty"`
+	PartialToolResult  *ToolResult     `json:"partial_tool_result,omitempty"`
+	ToolMessages       []Message       `json:"tool_messages,omitempty"`
+	IsError            bool            `json:"is_error,omitempty"`
+	Err                error           `json:"-"`
 }
 
 // EventSink receives runtime events from an engine.
@@ -396,11 +444,12 @@ func NewToolResultMessage(call ToolCall, result ToolResult, isError bool) Messag
 		Role:  RoleTool,
 		Parts: cloneParts(result.Content),
 		ToolResult: &ToolResultPayload{
-			ToolCallID: call.ID,
-			ToolName:   call.Name,
-			Content:    cloneParts(result.Content),
-			Details:    result.Details,
-			IsError:    isError,
+			ToolCallID:         call.ID,
+			OriginalToolCallID: call.OriginalID,
+			ToolName:           call.Name,
+			Content:            cloneParts(result.Content),
+			Details:            result.Details,
+			IsError:            isError,
 		},
 		Timestamp: time.Now().UTC(),
 	}
