@@ -235,13 +235,12 @@ func convertPartsToPigoBlocks(parts []Part) []pigo.ContentBlock {
 				Redacted:          part.Redacted,
 			})
 		case PartTypeImage:
-			data, mimeType, ok := extractInlineImageData(part)
-			if !ok {
+			if strings.TrimSpace(part.Data) == "" || strings.TrimSpace(part.MIMEType) == "" {
 				continue
 			}
 			blocks = append(blocks, pigo.ImageContent{
-				Data:     data,
-				MIMEType: mimeType,
+				Data:     part.Data,
+				MIMEType: part.MIMEType,
 			})
 		}
 	}
@@ -357,30 +356,6 @@ func toolCallArgumentsMap(call ToolCall) map[string]any {
 		return nil
 	}
 	return parsed
-}
-
-func extractInlineImageData(part Part) (string, string, bool) {
-	if strings.TrimSpace(part.ImageURL) == "" {
-		return "", "", false
-	}
-	if !strings.HasPrefix(part.ImageURL, "data:") {
-		return "", "", false
-	}
-
-	payload := strings.TrimPrefix(part.ImageURL, "data:")
-	mimeType, data, found := strings.Cut(payload, ",")
-	if !found {
-		return "", "", false
-	}
-
-	mimeType = strings.TrimSuffix(mimeType, ";base64")
-	if mimeType == "" {
-		mimeType = part.MIMEType
-	}
-	if mimeType == "" {
-		return "", "", false
-	}
-	return data, mimeType, true
 }
 
 func toPigoAuthConfigs(provider pigo.Provider, config *ProviderAuthConfig) map[pigo.Provider]pigo.AuthConfig {

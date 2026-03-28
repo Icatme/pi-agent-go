@@ -52,7 +52,7 @@ The repository has been split out as an independent public project and can be bu
 
 - Added `AgentOptions` and initial-state oriented construction.
 - Added package-level loop helpers mirroring the original runtime shape.
-- Added prompt convenience methods for text and image input.
+- Added prompt convenience methods for text and image input, with image parts now aligned to the original `pi-agent-core` / `pi-go` base64-plus-MIME shape.
 - Added custom message helpers without copying TypeScript-only declaration-merging patterns.
 - Added built-in default provider resolution through `pi-go` when a `ModelRef{Provider, Model}` is configured.
 - Added typed `ProviderConfig` / auth config on `ModelRef` so default provider execution no longer depends on ad-hoc metadata keys.

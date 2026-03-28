@@ -113,6 +113,13 @@ resolve the default `pi-go` provider implementation automatically.
 - `headers`: extra request headers as `map[string]string`
 - `auth`: typed provider auth config for provider-specific auth flows
 
+User image input now follows the same shape as `pi-agent-core` and `pi-go`:
+
+- `NewImagePart(data, mimeType)` expects base64 image data, not a remote URL
+- user messages can mix text and image parts in one message
+- the built-in `pi-go` provider path forwards those image parts directly to the
+  selected provider
+
 ## Graph Usage
 
 For the common case, use the built-in `SessionState` instead of writing a

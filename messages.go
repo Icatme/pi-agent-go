@@ -10,11 +10,11 @@ func NewTextPart(text string) Part {
 	}
 }
 
-// NewImagePart creates an image content part.
-func NewImagePart(imageURL, mimeType string) Part {
+// NewImagePart creates an image content part from base64 image data.
+func NewImagePart(data, mimeType string) Part {
 	return Part{
 		Type:     PartTypeImage,
-		ImageURL: imageURL,
+		Data:     data,
 		MIMEType: mimeType,
 	}
 }

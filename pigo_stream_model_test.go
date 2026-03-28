@@ -360,6 +360,123 @@ func TestDefaultPigoStreamModelUsesCodexSessionAndPreservesResponseID(t *testing
 	}
 }
 
+func TestDefaultPigoStreamModelSendsBase64ImageInput(t *testing.T) {
+	var requestBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("expected valid request json: %v", err)
+		}
+
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte(buildAnthropicSSE(
+			map[string]any{
+				"type": "message_start",
+				"message": map[string]any{
+					"id": "msg_img_1",
+					"usage": map[string]any{
+						"input_tokens":                10,
+						"output_tokens":               0,
+						"cache_read_input_tokens":     0,
+						"cache_creation_input_tokens": 0,
+					},
+				},
+			},
+			map[string]any{
+				"type":  "content_block_start",
+				"index": 0,
+				"content_block": map[string]any{
+					"type": "text",
+				},
+			},
+			map[string]any{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]any{
+					"type": "text_delta",
+					"text": "ok",
+				},
+			},
+			map[string]any{
+				"type":  "content_block_stop",
+				"index": 0,
+			},
+			map[string]any{
+				"type": "message_delta",
+				"delta": map[string]any{
+					"stop_reason": "end_turn",
+				},
+			},
+			map[string]any{
+				"type": "message_stop",
+			},
+		)))
+	}))
+	defer server.Close()
+
+	definition := AgentDefinition{
+		DefaultModel: ModelRef{
+			Provider: "kimi-coding",
+			Model:    "k2p5",
+			ProviderConfig: ProviderConfig{
+				BaseURL: server.URL,
+				APIKey:  "kimi-test-key",
+			},
+		},
+	}
+
+	model, ref, err := definition.ResolveModel(context.Background(), AgentSnapshot{})
+	if err != nil {
+		t.Fatalf("expected default provider model, got error: %v", err)
+	}
+
+	stream, err := model.Stream(context.Background(), ModelRequest{
+		Model:        ref,
+		SystemPrompt: "Inspect the image.",
+		Messages: []Message{
+			NewUserTextMessage(
+				"what is this?",
+				NewImagePart("base64-image-payload", "image/png"),
+			),
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected stream, got error: %v", err)
+	}
+
+	for range stream.Events() {
+	}
+	if _, err := stream.Wait(); err != nil {
+		t.Fatalf("expected final message, got error: %v", err)
+	}
+
+	messages, ok := requestBody["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("expected one outgoing message, got %#v", requestBody["messages"])
+	}
+
+	userMessage, ok := messages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected user message map, got %#v", messages[0])
+	}
+	content, ok := userMessage["content"].([]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("expected text+image content, got %#v", userMessage["content"])
+	}
+
+	imageBlock, ok := content[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected image block map, got %#v", content[1])
+	}
+	source, ok := imageBlock["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected image source, got %#v", imageBlock)
+	}
+	if source["type"] != "base64" || source["media_type"] != "image/png" || source["data"] != "base64-image-payload" {
+		t.Fatalf("expected base64 image payload, got %#v", source)
+	}
+}
+
 func buildAnthropicSSE(events ...map[string]any) string {
 	lines := make([]string, 0, len(events)+1)
 	for _, event := range events {

@@ -96,7 +96,7 @@ func TestAgentPromptHelpers(t *testing.T) {
 	if err := agent.PromptText(context.Background(), "hello"); err != nil {
 		t.Fatalf("PromptText returned error: %v", err)
 	}
-	if err := agent.PromptTextWithImages(context.Background(), "look", NewImagePart("https://example.com/a.png", "image/png")); err != nil {
+	if err := agent.PromptTextWithImages(context.Background(), "look", NewImagePart("base64-image", "image/png")); err != nil {
 		t.Fatalf("PromptTextWithImages returned error: %v", err)
 	}
 	if err := agent.PromptMessage(context.Background(), NewCustomMessage("artifact", map[string]any{"id": "1"}, NewTextPart("artifact"))); err != nil {
@@ -115,6 +115,9 @@ func TestAgentPromptHelpers(t *testing.T) {
 	}
 	if lastPrompt.Parts[1].Type != PartTypeImage {
 		t.Fatalf("expected image part, got %+v", lastPrompt.Parts[1])
+	}
+	if lastPrompt.Parts[1].Data != "base64-image" {
+		t.Fatalf("expected image data to be preserved, got %+v", lastPrompt.Parts[1])
 	}
 }
 

@@ -481,6 +481,79 @@ func TestEngineInjectsSteeringAfterAllToolCallsComplete(t *testing.T) {
 	}
 }
 
+func TestEngineBeforeToolCallMutatesExecutionArgsWithoutRevalidation(t *testing.T) {
+	engine := NewEngine()
+
+	var (
+		callIndex int
+		executed  any
+	)
+	definition, err := AgentDefinition{
+		Model: staticModel{
+			streamFn: func(_ context.Context, _ ModelRequest) (AssistantStream, error) {
+				if callIndex == 0 {
+					callIndex++
+					return newStaticAssistantStream(Message{
+						Role: RoleAssistant,
+						ToolCalls: []ToolCall{
+							{ID: "tool-1", Name: "echo", Arguments: []byte(`{"value":"hello"}`)},
+						},
+						Timestamp:  time.Now().UTC(),
+						StopReason: StopReasonToolUse,
+					}, nil), nil
+				}
+				return newStaticAssistantStream(Message{
+					Role:       RoleAssistant,
+					Parts:      []Part{{Type: PartTypeText, Text: "done"}},
+					Timestamp:  time.Now().UTC(),
+					StopReason: StopReasonStop,
+				}, nil), nil
+			},
+		},
+		Tools: []ToolDefinition{{
+			Name: "echo",
+			Execute: func(_ context.Context, _ string, args any, _ ToolUpdateFunc) (ToolResult, error) {
+				parsed, ok := args.(map[string]any)
+				if !ok {
+					t.Fatalf("unexpected args type %T", args)
+				}
+				executed = parsed["value"]
+				return ToolResult{
+					Content: []Part{{Type: PartTypeText, Text: "done"}},
+				}, nil
+			},
+		}},
+		BeforeToolCall: func(_ context.Context, input BeforeToolCallContext) (BeforeToolCallResult, error) {
+			parsed, ok := input.Args.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected before-tool args type %T", input.Args)
+			}
+			parsed["value"] = 123
+			return BeforeToolCallResult{}, nil
+		},
+	}.Validate()
+	if err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+
+	next, err := engine.Run(context.Background(), definition, &AgentSnapshot{}, []Message{NewTextMessage(RoleUser, "run")}, nil)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if executed != 123 {
+		t.Fatalf("expected mutated before-tool args to be executed, got %#v", executed)
+	}
+	if len(next.Messages) != 4 {
+		t.Fatalf("expected user, assistant, tool-result, assistant messages, got %d", len(next.Messages))
+	}
+	if next.Messages[2].Role != RoleTool {
+		t.Fatalf("expected tool result message, got %+v", next.Messages[2])
+	}
+	if next.Messages[3].Role != RoleAssistant || next.Messages[3].Parts[0].Text != "done" {
+		t.Fatalf("expected final assistant response, got %+v", next.Messages[3])
+	}
+}
+
 func TestEngineEmitsAssistantMessageUpdateSequence(t *testing.T) {
 	engine := NewEngine()
 

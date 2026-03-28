@@ -334,11 +334,12 @@ func (e *Engine) executeToolCalls(ctx context.Context, definition AgentDefinitio
 			continue
 		}
 
+		executionArgs := cloneAny(args)
 		if definition.BeforeToolCall != nil {
 			beforeResult, err := definition.BeforeToolCall(ctx, BeforeToolCallContext{
 				AssistantMessage: cloneMessage(assistant),
 				ToolCall:         call,
-				Args:             cloneAny(args),
+				Args:             executionArgs,
 				Context:          cloneAgentContext(currentContext),
 			})
 			if err != nil {
@@ -353,7 +354,7 @@ func (e *Engine) executeToolCalls(ctx context.Context, definition AgentDefinitio
 					call: call,
 					outcome: toolOutcome{
 						call:    call,
-						args:    cloneAny(args),
+						args:    cloneAny(executionArgs),
 						result:  errorToolResult(reason),
 						isError: true,
 					},
@@ -366,7 +367,7 @@ func (e *Engine) executeToolCalls(ctx context.Context, definition AgentDefinitio
 		prepared[i] = preparedToolCall{
 			call:    call,
 			tool:    tool,
-			args:    cloneAny(args),
+			args:    cloneAny(executionArgs),
 			context: cloneAgentContext(currentContext),
 		}
 	}

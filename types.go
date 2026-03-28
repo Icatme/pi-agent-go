@@ -158,10 +158,11 @@ const (
 type ThinkingBudgets map[ThinkingLevel]int
 
 // Part is a single content fragment inside a message.
+// Image parts store provider-ready base64 data plus MIME type.
 type Part struct {
 	Type      PartType `json:"type"`
 	Text      string   `json:"text,omitempty"`
-	ImageURL  string   `json:"image_url,omitempty"`
+	Data      string   `json:"data,omitempty"`
 	MIMEType  string   `json:"mime_type,omitempty"`
 	Signature string   `json:"signature,omitempty"`
 	Redacted  bool     `json:"redacted,omitempty"`
