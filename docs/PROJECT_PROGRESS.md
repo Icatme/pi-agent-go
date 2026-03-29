@@ -52,6 +52,10 @@ The repository has been split out as an independent public project and can be bu
 
 - Added `AgentOptions` and initial-state oriented construction.
 - Added package-level loop helpers mirroring the original runtime shape.
+- Added a native `prebuilt.PiAgent` direct exposure of the core `Agent`,
+  without rebuilding LangGraph-style state graphs or maintaining a second wrapper runtime.
+- Added a native `prebuilt.ChatAgent` wrapper for session-oriented single-agent
+  chat with runtime-backed streaming and dynamic tool management.
 - Added prompt convenience methods for text and image input, with image parts now aligned to the original `pi-agent-core` / `pi-go` base64-plus-MIME shape.
 - Added custom message helpers without copying TypeScript-only declaration-merging patterns.
 - Added built-in default provider resolution through `pi-go` when a `ModelRef{Provider, Model}` is configured.

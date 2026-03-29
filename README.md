@@ -51,6 +51,8 @@ Success means:
   - `steer` / `followUp`
   - `continue`
 - A higher-level `Agent` wrapper
+- A native `prebuilt.PiAgent` direct re-export of `piagentgo.Agent`
+- A native `prebuilt.ChatAgent` session wrapper built on the same runtime
 - Package-level loop façades: `RunAgentLoop`, `RunAgentLoopContinue`
 - Adapters for:
   - `langgraphgo` graph nodes
@@ -60,6 +62,9 @@ Success means:
 
 - `piagentgo/`
   - core runtime types, state, engine, and agent wrapper
+- `piagentgo/prebuilt`
+  - native high-level wrappers implemented on top of the core runtime
+  - does not reintroduce graph orchestration into the root module
 - `piagentgo/adapters/langgraphgo`
   - adapts `piagentgo` into `langgraphgo` graph nodes
   - maintained as a separate nested Go module so the root runtime module does
