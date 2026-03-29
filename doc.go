@@ -1,3 +1,4 @@
 // Package piagentgo provides a standalone agent runtime that can be used
-// directly or adapted into langgraphgo graphs.
+// directly, with optional adapter layers for integration into langgraphgo
+// graphs or other orchestration systems.
 package piagentgo

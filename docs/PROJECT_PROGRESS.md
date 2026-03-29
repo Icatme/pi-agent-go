@@ -67,6 +67,10 @@ The repository has been split out as an independent public project and can be bu
 
 - Added a `langgraphgo` adapter layer for node/session integration.
 - Normalized LangGraphGo integration so `SessionID == thread_id`.
+- Kept LangGraphGo support scoped to adapter-only bridge concerns such as state
+  mapping and checkpoint helpers, rather than moving orchestration semantics into core.
+- Split the LangGraphGo adapter into a separate nested module so the root
+  runtime module no longer depends on `langgraphgo`.
 
 ## Current Boundaries
 
@@ -74,6 +78,8 @@ The repository has been split out as an independent public project and can be bu
 - Multi-agent, supervisor, planner, and graph-native orchestration are out of scope for core.
 - LangGraphGo integration is optional and should remain a thin adapter layer.
 - `StreamModel` is the main long-term interface for model backends, with `pi-go` as the built-in default provider implementation.
+- Adapter-only LangGraphGo concerns include `thread_id` / `SessionID` alignment,
+  `SessionState` shapes, checkpoint helpers, binder helpers, and graph callback / trace wiring.
 
 ## Known Design Notes
 
@@ -85,5 +91,5 @@ The repository has been split out as an independent public project and can be bu
 
 1. Continue checking remaining differences against the original `pi-agent-core` tests and contracts.
 2. Tighten README wording so the core package, optional adapters, and non-goals are clearly separated.
-3. Split optional adapters into separate modules if core dependency isolation becomes a priority.
+3. Keep future optional adapters in separate modules when they would otherwise pull orchestration dependencies into the root runtime module.
 4. Keep future backend integrations behind `StreamModel` instead of pushing provider details into the core runtime.

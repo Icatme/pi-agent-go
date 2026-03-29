@@ -1,4 +1,9 @@
 // Package langgraphgo adapts piagentgo runtimes into langgraphgo nodes.
+//
+// This package is intentionally limited to bridge concerns at the graph
+// boundary. It may map thread/session identifiers, state shapes, and runtime
+// callbacks into langgraphgo constructs, but it must not redefine piagentgo
+// core runtime semantics.
 package langgraphgo
 
 import (
@@ -21,6 +26,9 @@ const (
 )
 
 // Binder maps graph state into and out of a piagentgo snapshot.
+//
+// Binder is a graph-boundary helper. It should only describe how outer graph
+// state is projected into piagentgo runtime state and back.
 type Binder[S any] struct {
 	GetSnapshot         func(S) piagentgo.AgentSnapshot
 	SetSnapshot         func(S, piagentgo.AgentSnapshot) S

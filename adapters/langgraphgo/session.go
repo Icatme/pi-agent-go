@@ -20,6 +20,9 @@ const (
 //
 // Snapshot stores durable runtime state, while Prompts, Steering, and FollowUps
 // are queued inputs waiting to be consumed by the next session-node run.
+//
+// This type exists only as a graph-facing adapter shape. It must not become a
+// second core runtime state model parallel to piagentgo.AgentSnapshot.
 type SessionState struct {
 	Snapshot  piagentgo.AgentSnapshot `json:"snapshot,omitempty"`
 	Prompts   []piagentgo.Message     `json:"prompts,omitempty"`

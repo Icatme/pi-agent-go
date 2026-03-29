@@ -1,6 +1,7 @@
 # pi-agent-go
 
-`piagentgo` is a standalone agent runtime for `langgraphgo`.
+`piagentgo` is a standalone single-agent runtime with an optional `langgraphgo`
+adapter layer.
 
 It is intentionally separate from `prebuilt/` so it can evolve without requiring
 changes to the upstream `langgraphgo` framework.
@@ -19,8 +20,8 @@ Core goals:
   be integrated without pushing transport logic into the core runtime.
 - Use `pi-go` as the built-in default provider implementation when a
   `ModelRef{Provider, Model}` is configured.
-- Keep the package usable on its own and also usable as a thin integration layer
-  inside `langgraphgo`.
+- Keep the package usable on its own and, when needed, usable through a thin
+  integration layer inside `langgraphgo`.
 
 Non-goals:
 
@@ -61,6 +62,8 @@ Success means:
   - core runtime types, state, engine, and agent wrapper
 - `piagentgo/adapters/langgraphgo`
   - adapts `piagentgo` into `langgraphgo` graph nodes
+  - maintained as a separate nested Go module so the root runtime module does
+    not depend on `langgraphgo`
 
 ## Direct Usage
 
@@ -121,6 +124,26 @@ User image input now follows the same shape as `pi-agent-core` and `pi-go`:
   selected provider
 
 ## Graph Usage
+
+`langgraphgo` support is optional. Keep adapter usage limited to graph-facing
+bridge concerns such as:
+
+- `thread_id` / `SessionID` alignment
+- standard `SessionState` shapes for graph state
+- checkpoint helper wrappers such as `UpdateSessionState` / `ResumeSession`
+- binder helpers for graph state mapping
+- graph callback / trace integration
+
+If a feature changes agent-loop semantics, message semantics, or tool/runtime
+contracts, it belongs in `piagentgo` core or in the outer orchestration layer,
+not in the adapter.
+
+The adapter lives in its own nested module. Test it separately with:
+
+```powershell
+cd adapters/langgraphgo
+go test ./...
+```
 
 For the common case, use the built-in `SessionState` instead of writing a
 custom binder. It already includes:
