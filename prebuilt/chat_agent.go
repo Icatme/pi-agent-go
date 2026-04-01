@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"strings"
-	"sync"
 	"time"
 
 	core "github.com/Icatme/pi-agent-go"
@@ -41,13 +40,10 @@ func WithMaxIterations(maxIterations int) ChatAgentOption {
 }
 
 // ChatAgent is a session-oriented single-agent wrapper.
-// It reuses the native piagentgo runtime for history, tools, and streaming.
+// Convenience APIs stay here, but the underlying behavior should reuse piagentgo.Agent directly.
 type ChatAgent struct {
 	agent        *core.Agent
-	threadID     string
-	baseResolver core.ToolResolver
-
-	mu           sync.RWMutex
+	baseTools    []core.ToolDefinition
 	dynamicTools []core.ToolDefinition
 }
 
@@ -57,41 +53,25 @@ func NewChatAgent(definition core.AgentDefinition, opts ...ChatAgentOption) (*Ch
 		opt(&definition)
 	}
 
-	threadID := strings.TrimSpace(definition.SessionID)
-	if threadID == "" {
-		threadID = newSessionID()
-		definition.SessionID = threadID
+	if strings.TrimSpace(definition.SessionID) == "" {
+		definition.SessionID = newSessionID()
 	}
 
-	chat := &ChatAgent{
-		threadID:     threadID,
-		baseResolver: definition.ToolResolver,
-	}
-
-	definition.ToolResolver = func(ctx context.Context, snapshot core.AgentSnapshot) ([]core.ToolDefinition, error) {
-		baseTools, err := chat.resolveBaseTools(ctx, snapshot, definition)
-		if err != nil {
-			return nil, err
-		}
-
-		chat.mu.RLock()
-		dynamic := cloneToolDefinitions(chat.dynamicTools)
-		chat.mu.RUnlock()
-
-		return append(baseTools, dynamic...), nil
-	}
-
+	baseTools := cloneToolDefinitions(definition.Tools)
 	agent, err := NewPiAgent(definition)
 	if err != nil {
 		return nil, err
 	}
-	chat.agent = agent
-	return chat, nil
+
+	return &ChatAgent{
+		agent:     agent,
+		baseTools: baseTools,
+	}, nil
 }
 
 // ThreadID returns the stable session identifier for the chat.
 func (c *ChatAgent) ThreadID() string {
-	return c.threadID
+	return c.agent.Snapshot().SessionID
 }
 
 // Chat appends a user message, runs one agent interaction, and returns the final assistant text.
@@ -119,76 +99,45 @@ func (c *ChatAgent) PrintStream(ctx context.Context, message string, write func(
 // AsyncChat streams assistant text deltas for one user message.
 func (c *ChatAgent) AsyncChat(ctx context.Context, message string) (<-chan string, error) {
 	output := make(chan string, 64)
-	runCtx, cancel := context.WithCancel(ctx)
-	eventCh := make(chan core.AgentEvent, 64)
-	errCh := make(chan error, 1)
-
-	unsubscribe := c.agent.Subscribe(func(event core.AgentEvent) {
-		select {
-		case eventCh <- event:
-		case <-runCtx.Done():
-		}
-	})
-
-	go func() {
-		defer close(errCh)
-		defer close(eventCh)
-		defer unsubscribe()
-
-		if err := c.agent.Prompt(runCtx, core.NewUserTextMessage(message)); err != nil {
-			select {
-			case errCh <- err:
-			default:
-			}
-		}
-	}()
 
 	go func() {
 		defer close(output)
-		defer cancel()
 
 		var sawDelta bool
-		for event := range eventCh {
+		unsubscribe := c.agent.Subscribe(func(event core.AgentEvent) {
 			switch event.Type {
 			case core.EventMessageUpdate:
 				if event.Message == nil || event.Message.Role != core.RoleAssistant {
-					continue
+					return
 				}
 				if event.AssistantEvent != nil && event.AssistantEvent.Type != core.AssistantEventTextDelta {
-					continue
+					return
 				}
 				if event.Delta == "" {
-					continue
+					return
 				}
 				sawDelta = true
 				select {
 				case <-ctx.Done():
-					return
 				case output <- event.Delta:
 				}
 			case core.EventMessageEnd:
 				if sawDelta || event.Message == nil || event.Message.Role != core.RoleAssistant {
-					continue
+					return
 				}
 				text := messageText(*event.Message)
 				if text == "" {
-					continue
+					return
 				}
 				select {
 				case <-ctx.Done():
-					return
 				case output <- text:
 				}
 			}
-		}
+		})
+		defer unsubscribe()
 
-		select {
-		case <-ctx.Done():
-			return
-		case err := <-errCh:
-			_ = err
-		default:
-		}
+		_ = c.agent.PromptText(ctx, message)
 	}()
 
 	return output, nil
@@ -226,37 +175,33 @@ func (c *ChatAgent) AsyncChatWithChunks(ctx context.Context, message string) (<-
 	return output, nil
 }
 
-// SetTools replaces all dynamic tools.
+// SetTools replaces dynamic tools while preserving base tools from construction time.
 func (c *ChatAgent) SetTools(newTools []core.ToolDefinition) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.dynamicTools = cloneToolDefinitions(newTools)
+	c.refreshTools()
 }
 
 // AddTool adds or replaces one dynamic tool by name.
 func (c *ChatAgent) AddTool(tool core.ToolDefinition) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	for i := range c.dynamicTools {
 		if c.dynamicTools[i].Name == tool.Name {
 			c.dynamicTools[i] = cloneToolDefinition(tool)
+			c.refreshTools()
 			return
 		}
 	}
 	c.dynamicTools = append(c.dynamicTools, cloneToolDefinition(tool))
+	c.refreshTools()
 }
 
 // RemoveTool removes one dynamic tool by name.
 func (c *ChatAgent) RemoveTool(toolName string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	for i := range c.dynamicTools {
 		if c.dynamicTools[i].Name != toolName {
 			continue
 		}
 		c.dynamicTools = append(c.dynamicTools[:i], c.dynamicTools[i+1:]...)
+		c.refreshTools()
 		return true
 	}
 	return false
@@ -264,23 +209,18 @@ func (c *ChatAgent) RemoveTool(toolName string) bool {
 
 // GetTools returns a copy of the dynamic tool list.
 func (c *ChatAgent) GetTools() []core.ToolDefinition {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return cloneToolDefinitions(c.dynamicTools)
 }
 
 // ClearTools removes all dynamic tools.
 func (c *ChatAgent) ClearTools() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.dynamicTools = nil
+	c.refreshTools()
 }
 
-func (c *ChatAgent) resolveBaseTools(ctx context.Context, snapshot core.AgentSnapshot, definition core.AgentDefinition) ([]core.ToolDefinition, error) {
-	if c.baseResolver != nil {
-		return c.baseResolver(ctx, snapshot)
-	}
-	return cloneToolDefinitions(definition.Tools), nil
+func (c *ChatAgent) refreshTools() {
+	tools := append(cloneToolDefinitions(c.baseTools), cloneToolDefinitions(c.dynamicTools)...)
+	c.agent.SetTools(tools)
 }
 
 func latestAssistantText(messages []core.Message) string {

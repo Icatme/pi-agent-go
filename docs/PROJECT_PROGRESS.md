@@ -54,8 +54,13 @@ The repository has been split out as an independent public project and can be bu
 - Added package-level loop helpers mirroring the original runtime shape.
 - Added a native `prebuilt.PiAgent` direct exposure of the core `Agent`,
   without rebuilding LangGraph-style state graphs or maintaining a second wrapper runtime.
+- Added a native `prebuilt.CreateAgent(...)` helper that turns the common
+  model-plus-tools setup into a direct `piagentgo.Agent` constructor path.
 - Added a native `prebuilt.ChatAgent` wrapper for session-oriented single-agent
   chat with runtime-backed streaming and dynamic tool management.
+- Added a native `prebuilt.ReflectionAgent` helper that runs sequential
+  draft-and-reflect passes on top of one-shot `piagentgo.Agent` executions,
+  instead of introducing graph orchestration into the root module.
 - Added prompt convenience methods for text and image input, with image parts now aligned to the original `pi-agent-core` / `pi-go` base64-plus-MIME shape.
 - Added custom message helpers without copying TypeScript-only declaration-merging patterns.
 - Added built-in default provider resolution through `pi-go` when a `ModelRef{Provider, Model}` is configured.
@@ -84,6 +89,9 @@ The repository has been split out as an independent public project and can be bu
 - `StreamModel` is the main long-term interface for model backends, with `pi-go` as the built-in default provider implementation.
 - Adapter-only LangGraphGo concerns include `thread_id` / `SessionID` alignment,
   `SessionState` shapes, checkpoint helpers, binder helpers, and graph callback / trace wiring.
+- Supervisor-style orchestration remains adapter-only. When dynamic worker
+  membership is needed, the adapter should select an active subset from a
+  pre-registered worker registry before compiling that run's graph.
 
 ## Known Design Notes
 

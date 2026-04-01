@@ -52,7 +52,9 @@ Success means:
   - `continue`
 - A higher-level `Agent` wrapper
 - A native `prebuilt.PiAgent` direct re-export of `piagentgo.Agent`
+- A native `prebuilt.CreateAgent(...)` helper for the common model-plus-tools constructor path
 - A native `prebuilt.ChatAgent` session wrapper built on the same runtime
+- A native `prebuilt.ReflectionAgent` helper for sequential draft-and-reflect passes
 - Package-level loop façades: `RunAgentLoop`, `RunAgentLoopContinue`
 - Adapters for:
   - `langgraphgo` graph nodes
@@ -138,6 +140,8 @@ bridge concerns such as:
 - checkpoint helper wrappers such as `UpdateSessionState` / `ResumeSession`
 - binder helpers for graph state mapping
 - graph callback / trace integration
+- runtime-built supervisor helpers that select an active subset from a
+  pre-registered worker registry before compiling one graph run
 
 If a feature changes agent-loop semantics, message semantics, or tool/runtime
 contracts, it belongs in `piagentgo` core or in the outer orchestration layer,
@@ -241,3 +245,5 @@ Use `langgraphgo` for:
 
 - The built-in graph wrapper is intentionally a single-session node. Multi-node
   orchestration and supervisor-style routing should still live in `langgraphgo`.
+- Dynamic supervisor membership should be handled as run-start worker selection,
+  not as in-run graph mutation.
