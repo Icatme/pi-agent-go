@@ -1,0 +1,4 @@
+mattermost-chatbot: websocket disconnected: NewWebSocketClient: model.websocket_client.connect_fail.app_error, read tcp [::1]:56799->[::1]:8065: wsarecv: An existing connection was forcibly closed by the remote host.
+mattermost-chatbot: websocket connect failed: NewWebSocketClient: model.websocket_client.connect_fail.app_error, dial tcp 127.0.0.1:8065: connectex: No connection could be made because the target machine actively refused it.
+mattermost-chatbot: websocket connect failed: NewWebSocketClient: model.websocket_client.connect_fail.app_error, dial tcp 127.0.0.1:8065: connectex: No connection could be made because the target machine actively refused it.
+mattermost-chatbot: websocket connect failed: NewWebSocketClient: model.websocket_client.connect_fail.app_error, dial tcp 127.0.0.1:8065: connectex: No connection could be made because the target machine actively refused it.

@@ -2,6 +2,7 @@ package piagentgo
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -329,9 +330,10 @@ func TestEngineToolExecutionParallelPreservesSourceOrder(t *testing.T) {
 	}
 
 	var events []AgentEvent
-	if _, err := engine.Run(context.Background(), definition, &AgentSnapshot{}, []Message{NewTextMessage(RoleUser, "echo both")}, func(event AgentEvent) {
+	next, err := engine.Run(context.Background(), definition, &AgentSnapshot{}, []Message{NewTextMessage(RoleUser, "echo both")}, func(event AgentEvent) {
 		events = append(events, event)
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
@@ -349,6 +351,9 @@ func TestEngineToolExecutionParallelPreservesSourceOrder(t *testing.T) {
 
 	if !observed {
 		t.Fatal("expected second tool execution to observe parallel execution")
+	}
+	if got := len(next.PendingToolCalls); got != 0 {
+		t.Fatalf("expected pending tool calls to be cleared after parallel execution, got %d", got)
 	}
 	if got := len(toolResultIDs); got != 2 {
 		t.Fatalf("expected 2 tool result messages, got %d", got)
@@ -485,6 +490,7 @@ func TestEngineBeforeToolCallMutatesExecutionArgsWithoutRevalidation(t *testing.
 	engine := NewEngine()
 
 	var (
+		afterArgs any
 		callIndex int
 		executed  any
 	)
@@ -531,6 +537,10 @@ func TestEngineBeforeToolCallMutatesExecutionArgsWithoutRevalidation(t *testing.
 			parsed["value"] = 123
 			return BeforeToolCallResult{}, nil
 		},
+		AfterToolCall: func(_ context.Context, input AfterToolCallContext) (AfterToolCallResult, error) {
+			afterArgs = input.Args
+			return AfterToolCallResult{}, nil
+		},
 	}.Validate()
 	if err != nil {
 		t.Fatalf("Validate returned error: %v", err)
@@ -543,6 +553,10 @@ func TestEngineBeforeToolCallMutatesExecutionArgsWithoutRevalidation(t *testing.
 	if executed != 123 {
 		t.Fatalf("expected mutated before-tool args to be executed, got %#v", executed)
 	}
+	afterParsed, ok := afterArgs.(map[string]any)
+	if !ok || afterParsed["value"] != 123 {
+		t.Fatalf("expected after-tool hook to see mutated args, got %#v", afterArgs)
+	}
 	if len(next.Messages) != 4 {
 		t.Fatalf("expected user, assistant, tool-result, assistant messages, got %d", len(next.Messages))
 	}
@@ -551,6 +565,322 @@ func TestEngineBeforeToolCallMutatesExecutionArgsWithoutRevalidation(t *testing.
 	}
 	if next.Messages[3].Role != RoleAssistant || next.Messages[3].Parts[0].Text != "done" {
 		t.Fatalf("expected final assistant response, got %+v", next.Messages[3])
+	}
+}
+
+func TestEngineBeforeToolCallBlockProducesErrorToolResult(t *testing.T) {
+	engine := NewEngine()
+
+	var (
+		callIndex     int
+		executeCalled bool
+	)
+	definition, err := AgentDefinition{
+		Model: staticModel{
+			streamFn: func(_ context.Context, _ ModelRequest) (AssistantStream, error) {
+				if callIndex == 0 {
+					callIndex++
+					return newStaticAssistantStream(Message{
+						Role: RoleAssistant,
+						ToolCalls: []ToolCall{
+							{ID: "tool-1", Name: "echo", Arguments: []byte(`{"value":"hello"}`)},
+						},
+						Timestamp:  time.Now().UTC(),
+						StopReason: StopReasonToolUse,
+					}, nil), nil
+				}
+				return newStaticAssistantStream(Message{
+					Role:       RoleAssistant,
+					Parts:      []Part{{Type: PartTypeText, Text: "done"}},
+					Timestamp:  time.Now().UTC(),
+					StopReason: StopReasonStop,
+				}, nil), nil
+			},
+		},
+		Tools: []ToolDefinition{{
+			Name: "echo",
+			Execute: func(_ context.Context, _ string, _ any, _ ToolUpdateFunc) (ToolResult, error) {
+				executeCalled = true
+				return ToolResult{}, nil
+			},
+		}},
+		BeforeToolCall: func(_ context.Context, _ BeforeToolCallContext) (BeforeToolCallResult, error) {
+			return BeforeToolCallResult{
+				Block:  true,
+				Reason: "blocked by policy",
+			}, nil
+		},
+	}.Validate()
+	if err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+
+	next, err := engine.Run(context.Background(), definition, &AgentSnapshot{}, []Message{NewTextMessage(RoleUser, "run")}, nil)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if executeCalled {
+		t.Fatal("expected blocked tool call to skip execution")
+	}
+	if len(next.Messages) != 4 {
+		t.Fatalf("expected user, assistant, blocked tool-result, assistant messages, got %d", len(next.Messages))
+	}
+	toolResult := next.Messages[2]
+	if toolResult.Role != RoleTool || toolResult.ToolResult == nil {
+		t.Fatalf("expected blocked tool result message, got %+v", toolResult)
+	}
+	if !toolResult.ToolResult.IsError || toolResult.ToolResult.Content[0].Text != "blocked by policy" {
+		t.Fatalf("expected blocked tool result payload, got %+v", toolResult.ToolResult)
+	}
+}
+
+func TestEngineBeforeToolCallErrorStopsRun(t *testing.T) {
+	engine := NewEngine()
+
+	definition, err := AgentDefinition{
+		Model: staticModel{
+			streamFn: func(_ context.Context, _ ModelRequest) (AssistantStream, error) {
+				return newStaticAssistantStream(Message{
+					Role: RoleAssistant,
+					ToolCalls: []ToolCall{
+						{ID: "tool-1", Name: "echo", Arguments: []byte(`{"value":"hello"}`)},
+					},
+					Timestamp:  time.Now().UTC(),
+					StopReason: StopReasonToolUse,
+				}, nil), nil
+			},
+		},
+		Tools: []ToolDefinition{{Name: "echo"}},
+		BeforeToolCall: func(_ context.Context, _ BeforeToolCallContext) (BeforeToolCallResult, error) {
+			return BeforeToolCallResult{}, errors.New("before hook boom")
+		},
+	}.Validate()
+	if err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+
+	next, err := engine.Run(context.Background(), definition, &AgentSnapshot{}, []Message{NewTextMessage(RoleUser, "run")}, nil)
+	if err == nil || err.Error() != "before hook boom" {
+		t.Fatalf("expected before-hook error, got %v", err)
+	}
+	if next == nil || next.Error != "before hook boom" {
+		t.Fatalf("expected snapshot error to be preserved, got %+v", next)
+	}
+	if len(next.Messages) != 2 {
+		t.Fatalf("expected run to stop before tool result append, got %d messages", len(next.Messages))
+	}
+}
+
+func TestEngineAfterToolCallOverridesResultAndErrorFlag(t *testing.T) {
+	engine := NewEngine()
+
+	callIndex := 0
+	definition, err := AgentDefinition{
+		Model: staticModel{
+			streamFn: func(_ context.Context, _ ModelRequest) (AssistantStream, error) {
+				if callIndex == 0 {
+					callIndex++
+					return newStaticAssistantStream(Message{
+						Role: RoleAssistant,
+						ToolCalls: []ToolCall{
+							{ID: "tool-1", Name: "echo", Arguments: []byte(`{"value":"hello"}`)},
+						},
+						Timestamp:  time.Now().UTC(),
+						StopReason: StopReasonToolUse,
+					}, nil), nil
+				}
+				return newStaticAssistantStream(Message{
+					Role:       RoleAssistant,
+					Parts:      []Part{{Type: PartTypeText, Text: "done"}},
+					Timestamp:  time.Now().UTC(),
+					StopReason: StopReasonStop,
+				}, nil), nil
+			},
+		},
+		Tools: []ToolDefinition{{
+			Name: "echo",
+			Execute: func(_ context.Context, _ string, _ any, _ ToolUpdateFunc) (ToolResult, error) {
+				return ToolResult{
+					Content: []Part{{Type: PartTypeText, Text: "raw"}},
+				}, nil
+			},
+		}},
+		AfterToolCall: func(_ context.Context, input AfterToolCallContext) (AfterToolCallResult, error) {
+			isError := true
+			return AfterToolCallResult{
+				Result: &ToolResult{
+					Content: []Part{{Type: PartTypeText, Text: "overridden"}},
+				},
+				IsError: &isError,
+			}, nil
+		},
+	}.Validate()
+	if err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+
+	next, err := engine.Run(context.Background(), definition, &AgentSnapshot{}, []Message{NewTextMessage(RoleUser, "run")}, nil)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(next.Messages) != 4 {
+		t.Fatalf("expected user, assistant, tool-result, assistant messages, got %d", len(next.Messages))
+	}
+	toolResult := next.Messages[2]
+	if toolResult.Role != RoleTool || toolResult.ToolResult == nil {
+		t.Fatalf("expected tool result message, got %+v", toolResult)
+	}
+	if !toolResult.ToolResult.IsError || toolResult.ToolResult.Content[0].Text != "overridden" {
+		t.Fatalf("expected overridden tool result payload, got %+v", toolResult.ToolResult)
+	}
+}
+
+func TestEngineAfterToolCallErrorStopsRun(t *testing.T) {
+	engine := NewEngine()
+
+	definition, err := AgentDefinition{
+		Model: staticModel{
+			streamFn: func(_ context.Context, _ ModelRequest) (AssistantStream, error) {
+				return newStaticAssistantStream(Message{
+					Role: RoleAssistant,
+					ToolCalls: []ToolCall{
+						{ID: "tool-1", Name: "echo", Arguments: []byte(`{"value":"hello"}`)},
+					},
+					Timestamp:  time.Now().UTC(),
+					StopReason: StopReasonToolUse,
+				}, nil), nil
+			},
+		},
+		Tools: []ToolDefinition{{
+			Name: "echo",
+			Execute: func(_ context.Context, _ string, _ any, _ ToolUpdateFunc) (ToolResult, error) {
+				return ToolResult{
+					Content: []Part{{Type: PartTypeText, Text: "raw"}},
+				}, nil
+			},
+		}},
+		AfterToolCall: func(_ context.Context, _ AfterToolCallContext) (AfterToolCallResult, error) {
+			return AfterToolCallResult{}, errors.New("after hook boom")
+		},
+	}.Validate()
+	if err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+
+	next, err := engine.Run(context.Background(), definition, &AgentSnapshot{}, []Message{NewTextMessage(RoleUser, "run")}, nil)
+	if err == nil || err.Error() != "after hook boom" {
+		t.Fatalf("expected after-hook error, got %v", err)
+	}
+	if next == nil || next.Error != "after hook boom" {
+		t.Fatalf("expected snapshot error to be preserved, got %+v", next)
+	}
+	if len(next.Messages) != 2 {
+		t.Fatalf("expected run to stop before tool result append, got %d messages", len(next.Messages))
+	}
+}
+
+func TestEngineContinueAllowsMixedMessagesWhenConvertToLLMMapsCustomTail(t *testing.T) {
+	engine := NewEngine()
+
+	var (
+		converted []Message
+		received  []Message
+	)
+	definition, err := AgentDefinition{
+		Model: staticModel{
+			streamFn: func(_ context.Context, request ModelRequest) (AssistantStream, error) {
+				received = cloneMessages(request.Messages)
+				return newStaticAssistantStream(Message{
+					Role:       RoleAssistant,
+					Parts:      []Part{{Type: PartTypeText, Text: "done"}},
+					Timestamp:  time.Now().UTC(),
+					StopReason: StopReasonStop,
+				}, nil), nil
+			},
+		},
+		TransformContext: func(_ context.Context, messages []Message) ([]Message, error) {
+			return cloneMessages(messages), nil
+		},
+		ConvertToLLM: func(_ context.Context, messages []Message) ([]Message, error) {
+			converted = cloneMessages(messages)
+			result := make([]Message, 0, len(messages))
+			for _, message := range messages {
+				if message.Role == RoleCustom {
+					result = append(result, Message{
+						Role: RoleUser,
+						Parts: []Part{
+							{Type: PartTypeText, Text: "converted custom"},
+							NewImagePart("custom-image", "image/png"),
+						},
+						Timestamp: message.Timestamp,
+					})
+					continue
+				}
+				result = append(result, cloneMessage(message))
+			}
+			return result, nil
+		},
+	}.Validate()
+	if err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+
+	snapshot := &AgentSnapshot{
+		Messages: []Message{
+			NewUserTextMessage("look", NewImagePart("user-image", "image/png")),
+			{
+				Role:      RoleAssistant,
+				Parts:     []Part{{Type: PartTypeText, Text: "I should inspect this."}, {Type: PartTypeThinking, Text: "Need a tool.", Signature: "sig_hist"}},
+				ToolCalls: []ToolCall{{ID: "tool_norm_1", OriginalID: "tool_raw_1", Name: "inspect", Arguments: []byte(`{"target":"chart"}`)}},
+				Timestamp: time.Now().UTC(),
+			},
+			{
+				Role: RoleTool,
+				ToolResult: &ToolResultPayload{
+					ToolCallID:         "tool_norm_1",
+					OriginalToolCallID: "tool_raw_1",
+					ToolName:           "inspect",
+					Content: []Part{
+						{Type: PartTypeText, Text: "Detected a line chart."},
+						NewImagePart("tool-image", "image/png"),
+					},
+				},
+				Timestamp: time.Now().UTC(),
+			},
+			{
+				Role:      RoleCustom,
+				Kind:      "attachment",
+				Parts:     []Part{{Type: PartTypeText, Text: "custom attachment"}},
+				Timestamp: time.Now().UTC(),
+			},
+		},
+	}
+
+	next, err := engine.Continue(context.Background(), definition, snapshot, nil)
+	if err != nil {
+		t.Fatalf("Continue returned error: %v", err)
+	}
+
+	if len(converted) != 4 {
+		t.Fatalf("expected transform/convert to receive all mixed messages, got %d", len(converted))
+	}
+	if len(converted[0].Parts) != 2 || converted[0].Parts[1].Type != PartTypeImage {
+		t.Fatalf("expected user image content to reach convertToLLM, got %+v", converted[0])
+	}
+	if len(converted[1].Parts) != 2 || converted[1].Parts[1].Signature != "sig_hist" || len(converted[1].ToolCalls) != 1 {
+		t.Fatalf("expected assistant thinking/tool call to reach convertToLLM, got %+v", converted[1])
+	}
+	if converted[2].ToolResult == nil || len(converted[2].ToolResult.Content) != 2 || converted[2].ToolResult.Content[1].Type != PartTypeImage {
+		t.Fatalf("expected tool result image content to reach convertToLLM, got %+v", converted[2])
+	}
+	if len(received) != 4 {
+		t.Fatalf("expected converted messages to reach model request, got %d", len(received))
+	}
+	if received[3].Role != RoleUser || len(received[3].Parts) != 2 || received[3].Parts[1].Type != PartTypeImage {
+		t.Fatalf("expected custom message to map into user+image content, got %+v", received[3])
+	}
+	if len(next.Messages) != 5 || next.Messages[4].Role != RoleAssistant {
+		t.Fatalf("expected continue to append assistant response, got %+v", next.Messages)
 	}
 }
 

@@ -3,6 +3,7 @@ package piagentgo
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -567,6 +568,46 @@ func TestAgentContinueWhileRunningReturnsErrAlreadyRunning(t *testing.T) {
 	}
 }
 
+func TestAgentBurstRequestsWhileRunningReturnErrAlreadyRunning(t *testing.T) {
+	started := make(chan struct{})
+	agent, err := NewAgent(AgentDefinition{
+		Model: blockingModel{started: started},
+	})
+	if err != nil {
+		t.Fatalf("NewAgent returned error: %v", err)
+	}
+
+	firstErrCh := make(chan error, 1)
+	go func() {
+		firstErrCh <- agent.Prompt(context.Background(), NewTextMessage(RoleUser, "first"))
+	}()
+
+	<-started
+
+	const attempts = 20
+	errCh := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		go func(index int) {
+			if index%2 == 0 {
+				errCh <- agent.Prompt(context.Background(), NewTextMessage(RoleUser, "burst"))
+				return
+			}
+			errCh <- agent.Continue(context.Background())
+		}(i)
+	}
+
+	for i := 0; i < attempts; i++ {
+		if err := <-errCh; !errors.Is(err, ErrAlreadyRunning) {
+			t.Fatalf("expected burst request %d to return ErrAlreadyRunning, got %v", i, err)
+		}
+	}
+
+	agent.Abort()
+	if err := <-firstErrCh; err != nil {
+		t.Fatalf("expected active prompt to finish cleanly after abort, got %v", err)
+	}
+}
+
 func TestAgentContinueNoMessagesReturnsError(t *testing.T) {
 	agent, err := NewAgent(AgentDefinition{
 		Model: staticModel{
@@ -947,6 +988,74 @@ func TestAgentStateUpdatesWhileStreaming(t *testing.T) {
 	}
 	if state.StreamMessage != nil {
 		t.Fatalf("expected stream message to be cleared, got %+v", state.StreamMessage)
+	}
+}
+
+func TestAgentSubscriberStateRemainsConsistentUnderBurstUpdates(t *testing.T) {
+	burstEvents := make([]AssistantEvent, 0, 101)
+	fullText := strings.Repeat("x", 100)
+	for i := 1; i <= 100; i++ {
+		burstEvents = append(burstEvents, AssistantEvent{
+			Type: AssistantEventTextDelta,
+			Message: Message{
+				Role:      RoleAssistant,
+				Parts:     []Part{{Type: PartTypeText, Text: fullText[:i]}},
+				Timestamp: time.Now().UTC(),
+			},
+			Delta: fullText[i-1 : i],
+		})
+	}
+
+	agent, err := NewAgent(AgentDefinition{
+		Model: staticModel{
+			streamFn: func(_ context.Context, _ ModelRequest) (AssistantStream, error) {
+				return newStaticAssistantStream(Message{
+					Role:       RoleAssistant,
+					Parts:      []Part{{Type: PartTypeText, Text: fullText}},
+					Timestamp:  time.Now().UTC(),
+					StopReason: StopReasonStop,
+				}, append([]AssistantEvent{{
+					Type:    AssistantEventStart,
+					Message: Message{Role: RoleAssistant, Timestamp: time.Now().UTC()},
+				}}, burstEvents...)), nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAgent returned error: %v", err)
+	}
+
+	updateCount := 0
+	agent.Subscribe(func(event AgentEvent) {
+		if event.Type != EventMessageUpdate {
+			return
+		}
+		updateCount++
+		state := agent.State()
+		if !state.IsStreaming {
+			t.Fatalf("expected agent to remain streaming during update %d", updateCount)
+		}
+		if state.StreamMessage == nil || state.StreamMessage.Role != RoleAssistant {
+			t.Fatalf("expected stream message during update %d, got %+v", updateCount, state.StreamMessage)
+		}
+		if len(state.StreamMessage.Parts) != 1 || state.StreamMessage.Parts[0].Type != PartTypeText {
+			t.Fatalf("expected text stream message during update %d, got %+v", updateCount, state.StreamMessage)
+		}
+		if len(state.StreamMessage.Parts[0].Text) != updateCount {
+			t.Fatalf("expected partial text length %d, got %+v", updateCount, state.StreamMessage)
+		}
+	})
+
+	if err := agent.Prompt(context.Background(), NewTextMessage(RoleUser, "burst")); err != nil {
+		t.Fatalf("Prompt returned error: %v", err)
+	}
+
+	if updateCount != 100 {
+		t.Fatalf("expected 100 update events, got %d", updateCount)
+	}
+	state := agent.State()
+	if state.IsStreaming || state.StreamMessage != nil {
+		t.Fatalf("expected idle agent after burst stream, got %+v", state)
 	}
 }
 

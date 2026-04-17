@@ -477,6 +477,308 @@ func TestDefaultPigoStreamModelSendsBase64ImageInput(t *testing.T) {
 	}
 }
 
+func TestDefaultPigoStreamModelMapsAnthropicProviderErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"type":"rate_limit_error","message":"too many requests"}}`))
+	}))
+	defer server.Close()
+
+	definition := AgentDefinition{
+		DefaultModel: ModelRef{
+			Provider: "kimi-coding",
+			Model:    "kimi-k2-thinking",
+			ProviderConfig: ProviderConfig{
+				BaseURL: server.URL,
+				APIKey:  "kimi-test-key",
+			},
+		},
+	}
+
+	model, ref, err := definition.ResolveModel(context.Background(), AgentSnapshot{})
+	if err != nil {
+		t.Fatalf("expected default provider model, got error: %v", err)
+	}
+
+	stream, err := model.Stream(context.Background(), ModelRequest{
+		Model:    ref,
+		Messages: []Message{NewTextMessage(RoleUser, "hello")},
+	})
+	if err != nil {
+		t.Fatalf("expected stream, got error: %v", err)
+	}
+
+	var sawErrorEvent bool
+	for event := range stream.Events() {
+		if event.Type == AssistantEventError {
+			sawErrorEvent = true
+		}
+	}
+
+	final, err := stream.Wait()
+	if err != nil {
+		t.Fatalf("expected assistant error message, got error: %v", err)
+	}
+	if !sawErrorEvent {
+		t.Fatal("expected error event")
+	}
+	if final.StopReason != StopReasonError {
+		t.Fatalf("expected error stop reason, got %+v", final)
+	}
+	if final.ErrorMessage != "too many requests" {
+		t.Fatalf("expected provider error message to be preserved, got %+v", final)
+	}
+	if final.Provider != "kimi-coding" || final.API != "anthropic-messages" || final.Model != "kimi-k2-thinking" {
+		t.Fatalf("expected provider/api/model fields on error, got %+v", final)
+	}
+}
+
+func TestDefaultPigoStreamModelPreservesCodexFailureMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte(buildCodexSSE(
+			map[string]any{
+				"type": "response.created",
+				"response": map[string]any{
+					"id": "resp_failed_1",
+				},
+			},
+			map[string]any{
+				"type": "response.failed",
+				"response": map[string]any{
+					"id": "resp_failed_1",
+					"error": map[string]any{
+						"code":    "usage_limit_reached",
+						"type":    "invalid_request_error",
+						"message": "quota exceeded",
+					},
+				},
+			},
+		)))
+	}))
+	defer server.Close()
+
+	definition := AgentDefinition{
+		DefaultModel: ModelRef{
+			Provider: "openai-codex",
+			Model:    "gpt-5.4",
+			ProviderConfig: ProviderConfig{
+				BaseURL: server.URL,
+				APIKey:  makeOpenAICodexToken("acc_test"),
+			},
+		},
+	}
+
+	model, ref, err := definition.ResolveModel(context.Background(), AgentSnapshot{})
+	if err != nil {
+		t.Fatalf("expected default provider model, got error: %v", err)
+	}
+
+	stream, err := model.Stream(context.Background(), ModelRequest{
+		Model:    ref,
+		Messages: []Message{NewTextMessage(RoleUser, "hello")},
+	})
+	if err != nil {
+		t.Fatalf("expected stream, got error: %v", err)
+	}
+
+	for range stream.Events() {
+	}
+
+	final, err := stream.Wait()
+	if err != nil {
+		t.Fatalf("expected assistant error message, got error: %v", err)
+	}
+	if final.StopReason != StopReasonError {
+		t.Fatalf("expected error stop reason, got %+v", final)
+	}
+	if final.ErrorMessage != "quota exceeded" {
+		t.Fatalf("expected codex error message, got %+v", final)
+	}
+	if final.ResponseID != "resp_failed_1" {
+		t.Fatalf("expected failed response id to be preserved, got %+v", final)
+	}
+	if final.Provider != "openai-codex" || final.API != "openai-codex-responses" || final.Model != "gpt-5.4" {
+		t.Fatalf("expected provider/api/model fields on codex failure, got %+v", final)
+	}
+}
+
+func TestDefaultPigoStreamModelReplaysMixedHistoryAndToolResultImages(t *testing.T) {
+	var requestBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("expected valid request json: %v", err)
+		}
+
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte(buildAnthropicSSE(
+			map[string]any{
+				"type": "message_start",
+				"message": map[string]any{
+					"id": "msg_replay_1",
+					"usage": map[string]any{
+						"input_tokens":                14,
+						"output_tokens":               0,
+						"cache_read_input_tokens":     0,
+						"cache_creation_input_tokens": 0,
+					},
+				},
+			},
+			map[string]any{
+				"type":  "content_block_start",
+				"index": 0,
+				"content_block": map[string]any{
+					"type": "text",
+				},
+			},
+			map[string]any{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]any{
+					"type": "text_delta",
+					"text": "done",
+				},
+			},
+			map[string]any{
+				"type":  "content_block_stop",
+				"index": 0,
+			},
+			map[string]any{
+				"type": "message_delta",
+				"delta": map[string]any{
+					"stop_reason": "end_turn",
+				},
+			},
+			map[string]any{
+				"type": "message_stop",
+			},
+		)))
+	}))
+	defer server.Close()
+
+	definition := AgentDefinition{
+		DefaultModel: ModelRef{
+			Provider: "kimi-coding",
+			Model:    "k2p5",
+			ProviderConfig: ProviderConfig{
+				BaseURL: server.URL,
+				APIKey:  "kimi-test-key",
+			},
+		},
+	}
+
+	model, ref, err := definition.ResolveModel(context.Background(), AgentSnapshot{})
+	if err != nil {
+		t.Fatalf("expected default provider model, got error: %v", err)
+	}
+
+	stream, err := model.Stream(context.Background(), ModelRequest{
+		Model: ref,
+		Messages: []Message{
+			NewTextMessage(RoleUser, "Use the replayed context."),
+			{
+				Role:       RoleAssistant,
+				Provider:   "kimi-coding",
+				API:        "anthropic-messages",
+				Model:      "k2p5",
+				ResponseID: "msg_hist_1",
+				Parts: []Part{
+					{Type: PartTypeText, Text: "I checked the screenshot."},
+					{Type: PartTypeThinking, Text: "Need the inspect tool.", Signature: "sig_hist"},
+				},
+				ToolCalls: []ToolCall{{
+					ID:         "tool_normalized_1",
+					OriginalID: "tool_raw_1",
+					Name:       "inspect",
+					ParsedArgs: map[string]any{"target": "chart"},
+				}},
+				StopReason: StopReasonToolUse,
+			},
+			{
+				Role: RoleTool,
+				ToolResult: &ToolResultPayload{
+					ToolCallID:         "tool_normalized_1",
+					OriginalToolCallID: "tool_raw_1",
+					ToolName:           "inspect",
+					Content: []Part{
+						{Type: PartTypeText, Text: "Detected a line chart."},
+						NewImagePart("tool-image-base64", "image/png"),
+					},
+				},
+			},
+			NewTextMessage(RoleUser, "Continue."),
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected stream, got error: %v", err)
+	}
+
+	for range stream.Events() {
+	}
+	if _, err := stream.Wait(); err != nil {
+		t.Fatalf("expected final message, got error: %v", err)
+	}
+
+	messages, ok := requestBody["messages"].([]any)
+	if !ok || len(messages) != 4 {
+		t.Fatalf("expected four outgoing messages, got %#v", requestBody["messages"])
+	}
+
+	assistantMessage, ok := messages[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected assistant replay message, got %#v", messages[1])
+	}
+	assistantContent, ok := assistantMessage["content"].([]any)
+	if !ok || len(assistantContent) != 3 {
+		t.Fatalf("expected text+thinking+tool_use replay blocks, got %#v", assistantMessage["content"])
+	}
+	textBlock := assistantContent[0].(map[string]any)
+	if textBlock["type"] != "text" || textBlock["text"] != "I checked the screenshot." {
+		t.Fatalf("expected replayed assistant text block, got %#v", textBlock)
+	}
+	thinkingBlock := assistantContent[1].(map[string]any)
+	if thinkingBlock["type"] != "thinking" || thinkingBlock["signature"] != "sig_hist" {
+		t.Fatalf("expected replayed assistant thinking block, got %#v", thinkingBlock)
+	}
+	toolUseBlock := assistantContent[2].(map[string]any)
+	if toolUseBlock["type"] != "tool_use" || toolUseBlock["id"] != "tool_raw_1" {
+		t.Fatalf("expected replayed raw tool use block, got %#v", toolUseBlock)
+	}
+
+	toolResultMessage, ok := messages[2].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool result replay message, got %#v", messages[2])
+	}
+	toolResultBlocks, ok := toolResultMessage["content"].([]any)
+	if !ok || len(toolResultBlocks) != 1 {
+		t.Fatalf("expected single tool result block, got %#v", toolResultMessage["content"])
+	}
+	toolResultBlock := toolResultBlocks[0].(map[string]any)
+	if toolResultBlock["type"] != "tool_result" || toolResultBlock["tool_use_id"] != "tool_raw_1" {
+		t.Fatalf("expected tool result replay to keep raw id, got %#v", toolResultBlock)
+	}
+	toolResultContent, ok := toolResultBlock["content"].([]any)
+	if !ok || len(toolResultContent) != 2 {
+		t.Fatalf("expected text+image tool result content, got %#v", toolResultBlock["content"])
+	}
+	toolResultText := toolResultContent[0].(map[string]any)
+	if toolResultText["type"] != "text" || toolResultText["text"] != "Detected a line chart." {
+		t.Fatalf("expected tool result text block, got %#v", toolResultText)
+	}
+	toolResultImage := toolResultContent[1].(map[string]any)
+	if toolResultImage["type"] != "image" {
+		t.Fatalf("expected tool result image block, got %#v", toolResultImage)
+	}
+	source, ok := toolResultImage["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool result image source, got %#v", toolResultImage)
+	}
+	if source["type"] != "base64" || source["media_type"] != "image/png" || source["data"] != "tool-image-base64" {
+		t.Fatalf("expected tool result image payload, got %#v", source)
+	}
+}
+
 func buildAnthropicSSE(events ...map[string]any) string {
 	lines := make([]string, 0, len(events)+1)
 	for _, event := range events {

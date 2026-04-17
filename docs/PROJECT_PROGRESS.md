@@ -71,6 +71,8 @@ The repository has been split out as an independent public project and can be bu
 - Added assistant event types for start, text lifecycle, tool-call lifecycle, done, and error.
 - Tightened runtime tests around streaming state, abort behavior, turn events, and tool-execution events.
 - Verified the default `pi-go` provider path preserves reasoning deltas, tool-call deltas, replay signatures, raw tool ids, and provider response ids.
+- Added offline provider regression coverage for provider error mapping, codex failure metadata, mixed history replay, and tool-result image replay.
+- Added concurrent request and subscriber-state stress coverage for burst prompt/continue/update paths.
 
 ### Integration Layers
 
@@ -80,6 +82,7 @@ The repository has been split out as an independent public project and can be bu
   mapping and checkpoint helpers, rather than moving orchestration semantics into core.
 - Split the LangGraphGo adapter into a separate nested module so the root
   runtime module no longer depends on `langgraphgo`.
+- Added snapshot round-trip coverage for root runtime state and `adapters/langgraphgo` session clone / JSON persistence.
 
 ## Current Boundaries
 
@@ -98,10 +101,12 @@ The repository has been split out as an independent public project and can be bu
 - Keeping optional adapters in the main module still pulls their dependency graph into the root `go.mod`.
 - Provider-specific streaming fidelity now flows through the built-in `pi-go` path for supported providers, while custom `StreamModel` implementations can still define their own fidelity.
 - Some integration-oriented files exist because the project was extracted from earlier work inside another repository; they should continue to be treated as optional layers.
+- Formal runtime semantics are now documented in `docs/runtime-contracts.md`.
+- Default offline and gated live test entrypoints are now documented in `docs/testing.md`.
 
 ## Recommended Next Steps
 
 1. Continue checking remaining differences against the original `pi-agent-core` tests and contracts.
-2. Tighten README wording so the core package, optional adapters, and non-goals are clearly separated.
-3. Keep future optional adapters in separate modules when they would otherwise pull orchestration dependencies into the root runtime module.
-4. Keep future backend integrations behind `StreamModel` instead of pushing provider details into the core runtime.
+2. Keep future optional adapters in separate modules when they would otherwise pull orchestration dependencies into the root runtime module.
+3. Keep future backend integrations behind `StreamModel` instead of pushing provider details into the core runtime.
+4. Treat `docs/runtime-contracts.md` and `docs/testing.md` as the source of truth when changing runtime semantics or release checks.

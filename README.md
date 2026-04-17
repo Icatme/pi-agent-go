@@ -116,6 +116,9 @@ If you only need built-in provider execution, set `InitialState.ModelRef` or
 `AgentDefinition.DefaultModel` with `Provider` and `Model`. The runtime will
 resolve the default `pi-go` provider implementation automatically.
 
+Formal runtime semantics live in [`docs/runtime-contracts.md`](/V:/gitdownload/pi-agent-go/docs/runtime-contracts.md).
+Testing entrypoints and release checks live in [`docs/testing.md`](/V:/gitdownload/pi-agent-go/docs/testing.md).
+
 `ModelRef.ProviderConfig` carries typed provider runtime settings when needed:
 
 - `base_url`: override the provider base URL
@@ -129,6 +132,25 @@ User image input now follows the same shape as `pi-agent-core` and `pi-go`:
 - user messages can mix text and image parts in one message
 - the built-in `pi-go` provider path forwards those image parts directly to the
   selected provider
+
+The current stable core runtime surface is:
+
+- `Agent`
+- `Engine`
+- `AgentDefinition`
+- `ModelRef`
+- `ProviderConfig`
+- `Message`
+- `ToolCall`
+- `ToolResultPayload`
+- `StreamModel`
+
+Secondary integration surfaces:
+
+- `prebuilt`
+- `adapters/langgraphgo`
+
+This repository does not keep a compatibility shim for legacy image URLs.
 
 ## Graph Usage
 
@@ -153,6 +175,10 @@ The adapter lives in its own nested module. Test it separately with:
 cd adapters/langgraphgo
 go test ./...
 ```
+
+Live provider tests are manual release checks, not default CI. See
+[`docs/testing.md`](/V:/gitdownload/pi-agent-go/docs/testing.md) for the exact
+environment variables, skip behavior, and commands.
 
 For the common case, use the built-in `SessionState` instead of writing a
 custom binder. It already includes:
